@@ -66,4 +66,20 @@ export interface Store {
   isJtiRevoked(jti: string): Promise<boolean>;
 
   addEvent(e: EventRecord): Promise<void>;
+
+  checkRateLimit(
+    key: string,
+    limit: number,
+    windowMs: number,
+    now: number,
+  ): Promise<{ allowed: boolean; retryAfterSec: number }>;
+
+  getAuthLockout(key: string, now: number): Promise<{ locked: boolean; retryAfterSec: number }>;
+  recordAuthFailure(
+    key: string,
+    maxAttempts: number,
+    lockoutMs: number,
+    now: number,
+  ): Promise<{ locked: boolean; remainingAttempts: number; retryAfterSec: number }>;
+  clearAuthFailure(key: string): Promise<void>;
 }

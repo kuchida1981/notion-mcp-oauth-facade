@@ -74,6 +74,61 @@ export class FirestoreStore implements Store {
       expire_at: Timestamp.fromDate(e.expire_at),
     });
   }
+
+  async checkRateLimit(key: string, limit: number, windowMs: number, now: number) {
+    const ref = this.col("rate_limits").doc(key);
+    return this.db.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      const data = s.exists ? (s.data() as { count: number; reset_at: number }) : undefined;
+      if (!data || data.reset_at <= now) {
+        const resetAt = now + windowMs;
+        tx.set(ref, { count: 1, reset_at: resetAt, expire_at: Timestamp.fromMillis(resetAt) });
+        return { allowed: true, retryAfterSec: 0 };
+      }
+      if (data.count >= limit) {
+        return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((data.reset_at - now) / 1000)) };
+      }
+      tx.update(ref, { count: data.count + 1 });
+      return { allowed: true, retryAfterSec: 0 };
+    });
+  }
+
+  async getAuthLockout(key: string, now: number) {
+    const s = await this.col("auth_attempts").doc(key).get();
+    if (!s.exists) return { locked: false, retryAfterSec: 0 };
+    const data = s.data() as { locked_until?: number };
+    if (!data.locked_until || data.locked_until <= now) return { locked: false, retryAfterSec: 0 };
+    return { locked: true, retryAfterSec: Math.max(1, Math.ceil((data.locked_until - now) / 1000)) };
+  }
+
+  async recordAuthFailure(key: string, maxAttempts: number, lockoutMs: number, now: number) {
+    const ref = this.col("auth_attempts").doc(key);
+    return this.db.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      const data = s.exists ? (s.data() as { failures?: number; locked_until?: number }) : undefined;
+      const resetPrev = !data || (data.locked_until !== undefined && data.locked_until > 0 && data.locked_until <= now);
+      const failures = (resetPrev ? 0 : (data?.failures ?? 0)) + 1;
+      if (failures >= maxAttempts) {
+        const lockedUntil = now + lockoutMs;
+        tx.set(ref, {
+          failures,
+          locked_until: lockedUntil,
+          expire_at: Timestamp.fromMillis(lockedUntil),
+        });
+        return { locked: true, remainingAttempts: 0, retryAfterSec: Math.ceil(lockoutMs / 1000) };
+      }
+      tx.set(ref, {
+        failures,
+        locked_until: 0,
+        expire_at: Timestamp.fromMillis(now + lockoutMs),
+      });
+      return { locked: false, remainingAttempts: maxAttempts - failures, retryAfterSec: 0 };
+    });
+  }
+
+  async clearAuthFailure(key: string) {
+    await this.col("auth_attempts").doc(key).delete();
+  }
 }
 
 /** Firestore は undefined を拒否するため除去する */
