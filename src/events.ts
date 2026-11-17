@@ -5,7 +5,7 @@ import type { EventRecord, Store } from "./store/types.js";
 export type EventFields = Partial<
   Pick<
     EventRecord,
-    "grant_type" | "client_id" | "token_hash_prefix" | "redirect_uri" | "resource" | "error" | "rpc_method" | "tool_name" | "tool_error" | "result_bytes"
+    "grant_type" | "client_id" | "token_hash_prefix" | "redirect_uri" | "resource" | "error" | "rpc_method" | "tool_name" | "tool_error" | "result_bytes" | "req_info"
   >
 >;
 

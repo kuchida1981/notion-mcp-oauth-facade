@@ -411,3 +411,24 @@ describe("MCP_JSON_RESPONSE=false (SSE 応答)", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
   });
 });
+
+describe("events: リクエストヘッダの要約", () => {
+  it("req_info を記録し、Authorization は含めない", async () => {
+    const { app, store } = await setup();
+    const { tokens } = await fullFlow(app);
+    await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${tokens.access_token}`,
+        "Mcp-Protocol-Version": "2025-06-18",
+        "User-Agent": "test-agent",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const evt = store.events.filter((e) => e.endpoint === "/mcp").at(-1)!;
+    expect(evt.req_info).toMatchObject({ has_session_id: false, protocol_version: "2025-06-18", ua: "test-agent" });
+    expect(JSON.stringify(evt)).not.toContain(tokens.access_token);
+  });
+});

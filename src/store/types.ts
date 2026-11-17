@@ -51,6 +51,14 @@ export interface EventRecord {
   tool_error?: string;
   /** /mcp: ツール結果テキストのバイト数 */
   result_bytes?: number;
+  /** /mcp: リクエストヘッダの要約 (値そのものではなく有無・種別のみ。トークンは含まない) */
+  req_info?: {
+    has_session_id: boolean;
+    protocol_version?: string;
+    accept?: string;
+    content_type?: string;
+    ua?: string;
+  };
   /** 処理時間 (ms) */
   duration_ms?: number;
   /** Firestore TTL 用 (作成から30日後) */

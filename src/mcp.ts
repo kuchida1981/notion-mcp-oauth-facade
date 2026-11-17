@@ -317,6 +317,13 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
     }
 
     Object.assign(evt, await describeRpc(c.req.raw));
+    evt.req_info = {
+      has_session_id: c.req.header("mcp-session-id") !== undefined,
+      protocol_version: c.req.header("mcp-protocol-version")?.slice(0, 32),
+      accept: c.req.header("accept")?.slice(0, 80),
+      content_type: c.req.header("content-type")?.slice(0, 80),
+      ua: c.req.header("user-agent")?.slice(0, 80),
+    };
 
     const server = buildMcpServer(config, claims, notionOverride, evt);
     const transport = new WebStandardStreamableHTTPServerTransport({
@@ -345,6 +352,12 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
   // POST 以外 (GET/DELETE ほか) は 405
   app.all("/mcp", (c) => {
     c.get("evt").error = "method_not_allowed";
+    c.get("evt").req_info = {
+      has_session_id: c.req.header("mcp-session-id") !== undefined,
+      protocol_version: c.req.header("mcp-protocol-version")?.slice(0, 32),
+      accept: c.req.header("accept")?.slice(0, 80),
+      ua: c.req.header("user-agent")?.slice(0, 80),
+    };
     return c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" });
   });
 
