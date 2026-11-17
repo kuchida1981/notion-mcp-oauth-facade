@@ -6,6 +6,8 @@ export class InMemoryStore implements Store {
   refresh = new Map<string, RefreshRecord>();
   revokedJti = new Map<string, number>();
   events: EventRecord[] = [];
+  rateLimits = new Map<string, { count: number; resetAt: number }>();
+  authAttempts = new Map<string, { failures: number; lockedUntil: number }>();
 
   async putClient(c: ClientRecord) {
     this.clients.set(c.client_id, { ...c });
@@ -47,5 +49,40 @@ export class InMemoryStore implements Store {
 
   async addEvent(e: EventRecord) {
     this.events.push(e);
+  }
+
+  async checkRateLimit(key: string, limit: number, windowMs: number, now: number) {
+    const cur = this.rateLimits.get(key);
+    if (!cur || cur.resetAt <= now) {
+      this.rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+      return { allowed: true, retryAfterSec: 0 };
+    }
+    if (cur.count >= limit) {
+      return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((cur.resetAt - now) / 1000)) };
+    }
+    cur.count += 1;
+    return { allowed: true, retryAfterSec: 0 };
+  }
+
+  async getAuthLockout(key: string, now: number) {
+    const cur = this.authAttempts.get(key);
+    if (!cur || cur.lockedUntil <= now) return { locked: false, retryAfterSec: 0 };
+    return { locked: true, retryAfterSec: Math.max(1, Math.ceil((cur.lockedUntil - now) / 1000)) };
+  }
+
+  async recordAuthFailure(key: string, maxAttempts: number, lockoutMs: number, now: number) {
+    const cur = this.authAttempts.get(key);
+    const failures = (!cur || (cur.lockedUntil > 0 && cur.lockedUntil <= now) ? 0 : cur.failures) + 1;
+    if (failures >= maxAttempts) {
+      const lockedUntil = now + lockoutMs;
+      this.authAttempts.set(key, { failures, lockedUntil });
+      return { locked: true, remainingAttempts: 0, retryAfterSec: Math.ceil(lockoutMs / 1000) };
+    }
+    this.authAttempts.set(key, { failures, lockedUntil: 0 });
+    return { locked: false, remainingAttempts: maxAttempts - failures, retryAfterSec: 0 };
+  }
+
+  async clearAuthFailure(key: string) {
+    this.authAttempts.delete(key);
   }
 }

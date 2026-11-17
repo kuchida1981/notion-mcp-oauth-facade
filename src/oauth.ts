@@ -8,8 +8,26 @@ import { readVerifiedJti, resourceUrl, signAccessToken } from "./tokens.js";
 
 const SCOPE = "mcp";
 const CODE_TTL_MS = 60_000;
+const REGISTER_LIMIT = 10;
+const REGISTER_WINDOW_MS = 10 * 60_000;
+const AUTHORIZE_GET_LIMIT = 30;
+const AUTHORIZE_GET_WINDOW_MS = 60_000;
+const AUTH_MAX_FAILURES = 5;
+const AUTH_LOCKOUT_MS = 15 * 60_000;
 
 const noStore = { "Cache-Control": "no-store", Pragma: "no-cache" };
+const htmlHeaders = {
+  ...noStore,
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+};
+
+function clientIpKey(c: Context<AppEnv>, prefix: string): string {
+  const xff = c.req.header("x-forwarded-for");
+  const ip = xff ? xff.split(",")[0]!.trim() : "unknown";
+  return `${prefix}:${sha256Hex(ip)}`;
+}
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -87,6 +105,21 @@ export function oauthRoutes(config: Config, store: Store): Hono<AppEnv> {
 
   // ---------- /register (RFC 7591) ----------
   app.post("/register", async (c) => {
+    const rl = await store.checkRateLimit(
+      clientIpKey(c, "register"),
+      REGISTER_LIMIT,
+      REGISTER_WINDOW_MS,
+      Date.now(),
+    );
+    if (!rl.allowed) {
+      c.get("evt").error = "too_many_requests";
+      return c.json(
+        { error: "too_many_requests", error_description: "登録リクエストが多すぎます。しばらく待ってください" },
+        429,
+        { ...noStore, "Retry-After": String(rl.retryAfterSec) },
+      );
+    }
+
     let body: Record<string, unknown>;
     try {
       const j = await c.req.json();
@@ -150,7 +183,7 @@ export function oauthRoutes(config: Config, store: Store): Hono<AppEnv> {
     evt.resource = p.resource;
     const fail = (msg: string, code: string) => {
       evt.error = code;
-      return { page: c.html(page("エラー", `<h1>エラー</h1><p>${esc(msg)}</p>`), 400) };
+      return { page: c.html(page("エラー", `<h1>エラー</h1><p>${esc(msg)}</p>`), 400, htmlHeaders) };
     };
     if (!p.client_id || !p.redirect_uri) return fail("client_id と redirect_uri は必須です", "invalid_request");
     const client = await store.getClient(p.client_id);
@@ -178,6 +211,20 @@ export function oauthRoutes(config: Config, store: Store): Hono<AppEnv> {
   };
 
   app.get("/authorize", async (c) => {
+    const rl = await store.checkRateLimit(
+      clientIpKey(c, "authorize_get"),
+      AUTHORIZE_GET_LIMIT,
+      AUTHORIZE_GET_WINDOW_MS,
+      Date.now(),
+    );
+    if (!rl.allowed) {
+      c.get("evt").error = "too_many_requests";
+      return c.html(
+        page("エラー", "<h1>エラー</h1><p>リクエストが多すぎます。しばらく待ってください。</p>"),
+        429,
+        { ...htmlHeaders, "Retry-After": String(rl.retryAfterSec) },
+      );
+    }
     const p = pickParams(c.req.query());
     const v = await validateAuthorize(c, p);
     if ("page" in v) return v.page;
@@ -187,7 +234,7 @@ export function oauthRoutes(config: Config, store: Store): Hono<AppEnv> {
         302,
       );
     }
-    return c.html(authorizeForm(p, v.clientName), 200, noStore);
+    return c.html(authorizeForm(p, v.clientName), 200, htmlHeaders);
   });
 
   app.post("/authorize", async (c) => {
@@ -201,11 +248,37 @@ export function oauthRoutes(config: Config, store: Store): Hono<AppEnv> {
         302,
       );
     }
+
+    const now = Date.now();
+    const authKey = clientIpKey(c, "auth");
+    const lockout = await store.getAuthLockout(authKey, now);
+    if (lockout.locked) {
+      c.get("evt").error = "temporarily_locked";
+      return c.html(
+        authorizeForm(p, v.clientName, `試行回数が上限を超えました。${lockout.retryAfterSec}秒後に再試行してください`),
+        429,
+        { ...htmlHeaders, "Retry-After": String(lockout.retryAfterSec) },
+      );
+    }
+
     const password = typeof form.password === "string" ? form.password : "";
     if (!(await verifyPassword(password, config.ownerPasswordHash))) {
-      c.get("evt").error = "access_denied";
-      return c.html(authorizeForm(p, v.clientName, "パスワードが違います"), 401, noStore);
+      const failState = await store.recordAuthFailure(authKey, AUTH_MAX_FAILURES, AUTH_LOCKOUT_MS, now);
+      c.get("evt").error = failState.locked ? "temporarily_locked" : "access_denied";
+      if (failState.locked) {
+        return c.html(
+          authorizeForm(p, v.clientName, `試行回数が上限を超えました。${failState.retryAfterSec}秒後に再試行してください`),
+          429,
+          { ...htmlHeaders, "Retry-After": String(failState.retryAfterSec) },
+        );
+      }
+      return c.html(
+        authorizeForm(p, v.clientName, `パスワードが違います (残り試行回数: ${failState.remainingAttempts})`),
+        401,
+        htmlHeaders,
+      );
     }
+    await store.clearAuthFailure(authKey);
     const code = randomToken();
     await store.putCode({
       code_hash: sha256Hex(code),
