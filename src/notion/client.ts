@@ -20,6 +20,9 @@ export function normalizeNotionUuid(id: string): string {
   throw new Error("Invalid Notion ID: must be a UUID");
 }
 
+const BLOCK_FETCH_CONCURRENCY = 3;
+const BLOCK_FETCH_MAX_REQUESTS = 200;
+
 export class NotionApiError extends Error {
   constructor(
     public readonly status: number,
@@ -245,26 +248,53 @@ export class NotionClient {
     return this.request<NotionPage>("GET", `/pages/${id}`);
   }
 
+  /**
+   * ブロック子要素を再帰取得する。同階層の子は並列に取得するが、HTTP の同時実行数は
+   * BLOCK_FETCH_CONCURRENCY に制限し (Notion は約 3 req/s)、1 回の取得あたりの
+   * 総 API 呼び出し数は BLOCK_FETCH_MAX_REQUESTS で打ち切る (超過分の子は展開しない)。
+   */
   async getAllBlockChildren(blockId: string, depth = 0, maxDepth = 3): Promise<NotionBlock[]> {
-    const id = normalizeNotionUuid(blockId);
+    const ctx = { active: 0, queue: [] as Array<() => void>, requests: 0 };
+    return this.fetchChildren(normalizeNotionUuid(blockId), depth, maxDepth, ctx);
+  }
+
+  private async fetchChildren(
+    id: string,
+    depth: number,
+    maxDepth: number,
+    ctx: { active: number; queue: Array<() => void>; requests: number },
+  ): Promise<NotionBlock[]> {
     const blocks: NotionBlock[] = [];
     let cursor: string | undefined;
 
     do {
+      if (ctx.requests >= BLOCK_FETCH_MAX_REQUESTS) break;
+      ctx.requests++;
       const qs = new URLSearchParams({ page_size: "100" });
       if (cursor) qs.set("start_cursor", cursor);
-      const res = await this.request<{
-        results: NotionBlock[];
-        next_cursor: string | null;
-        has_more: boolean;
-      }>("GET", `/blocks/${id}/children?${qs.toString()}`);
-
-      for (const b of res.results ?? []) {
-        if (b.has_children && depth < maxDepth) {
-          b.children = await this.getAllBlockChildren(b.id, depth + 1, maxDepth);
-        }
-        blocks.push(b);
+      if (ctx.active >= BLOCK_FETCH_CONCURRENCY) {
+        await new Promise<void>((resolve) => ctx.queue.push(resolve));
+      } else {
+        ctx.active++;
       }
+      let res: { results: NotionBlock[]; next_cursor: string | null; has_more: boolean };
+      try {
+        res = await this.request("GET", `/blocks/${id}/children?${qs.toString()}`);
+      } finally {
+        const next = ctx.queue.shift();
+        if (next) next(); // スロットを次の待機者へ引き継ぐ
+        else ctx.active--;
+      }
+
+      const page = res.results ?? [];
+      await Promise.all(
+        page
+          .filter((b) => b.has_children && depth < maxDepth)
+          .map(async (b) => {
+            b.children = await this.fetchChildren(b.id, depth + 1, maxDepth, ctx);
+          }),
+      );
+      blocks.push(...page);
       cursor = res.has_more && res.next_cursor ? res.next_cursor : undefined;
     } while (cursor);
 
