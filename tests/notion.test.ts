@@ -331,3 +331,43 @@ describe("NotionClient & /mcp Notion ツール", () => {
     expect(updated).toMatchObject({ id: PAGE_ID, updated_properties: true, appended_blocks: 1 });
   });
 });
+
+describe("getAllBlockChildren の並列取得", () => {
+  const uuid = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
+
+  it("同時実行数を 3 に制限しつつ全子ブロックを取得し、順序を保つ", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetchFn: typeof fetch = async (input) => {
+      const m = /blocks\/([^/]+)\/children/.exec(String(input))!;
+      const id = m[1]!;
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      const results =
+        id === uuid(0)
+          ? Array.from({ length: 8 }, (_, i) => ({ id: uuid(i + 1), type: "paragraph", has_children: true }))
+          : [{ id: `leaf-of-${id}`, type: "paragraph", has_children: false }];
+      return new Response(JSON.stringify({ results, has_more: false, next_cursor: null }), { status: 200 });
+    };
+    const client = new NotionClient({ token: "t", fetchFn });
+    const blocks = await client.getAllBlockChildren(uuid(0));
+    expect(blocks.map((b) => b.id)).toEqual(Array.from({ length: 8 }, (_, i) => uuid(i + 1)));
+    expect(blocks.every((b) => b.children?.length === 1)).toBe(true);
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(maxActive).toBeGreaterThan(1);
+  });
+
+  it("API 呼び出し総数が上限 (200) を超えたら展開を打ち切る", async () => {
+    let calls = 0;
+    const fetchFn: typeof fetch = async () => {
+      calls++;
+      const results = Array.from({ length: 5 }, (_, i) => ({ id: uuid(calls * 10 + i), type: "paragraph", has_children: true }));
+      return new Response(JSON.stringify({ results, has_more: false, next_cursor: null }), { status: 200 });
+    };
+    const client = new NotionClient({ token: "t", fetchFn });
+    await client.getAllBlockChildren(uuid(0), 0, 10);
+    expect(calls).toBe(200);
+  });
+});
