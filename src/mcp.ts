@@ -275,6 +275,31 @@ async function describeRpc(req: Request): Promise<{ rpc_method?: string; tool_na
   }
 }
 
+/** tools/list の応答から Gemini が解釈できない可能性のある項目を取り除く (実験用) */
+export function sanitizeToolsList(body: unknown): unknown {
+  const strip = (schema: unknown): unknown => {
+    if (Array.isArray(schema)) return schema.map(strip);
+    if (typeof schema !== "object" || schema === null) return schema;
+    return Object.fromEntries(
+      Object.entries(schema as Record<string, unknown>)
+        .filter(([k]) => k !== "$schema" && k !== "additionalProperties")
+        .map(([k, v]) => [k, strip(v)]),
+    );
+  };
+  const b = body as { result?: { tools?: Array<Record<string, unknown>> } };
+  if (!b?.result?.tools) return body;
+  return {
+    ...b,
+    result: {
+      ...b.result,
+      tools: b.result.tools.map((t) => {
+        const { execution: _execution, ...rest } = t;
+        return { ...rest, inputSchema: strip(t.inputSchema) };
+      }),
+    },
+  };
+}
+
 export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionClient): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const metadataUrl = `${config.publicBaseUrl}/.well-known/oauth-protected-resource`;
@@ -341,6 +366,10 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
     }
     if (config.mcpJsonResponse || !res.body) {
       closeServer(); // JSON 応答は生成済みなので後始末してよい
+      if (config.mcpSanitizeSchema && config.mcpJsonResponse && evt.rpc_method === "tools/list" && res.ok) {
+        const body = sanitizeToolsList(await res.json());
+        return new Response(JSON.stringify(body), { status: res.status, headers: res.headers });
+      }
       return res;
     }
     // SSE 応答: ストリームが書き終わる (または中断される) まで transport を閉じない

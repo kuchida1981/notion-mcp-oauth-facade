@@ -432,3 +432,20 @@ describe("events: リクエストヘッダの要約", () => {
     expect(JSON.stringify(evt)).not.toContain(tokens.access_token);
   });
 });
+
+describe("MCP_SANITIZE_SCHEMA", () => {
+  it("true のとき tools/list から $schema と execution を除く (既定 false では残る)", async () => {
+    const on = await setup({ MCP_SANITIZE_SCHEMA: "true" });
+    const t1 = (await fullFlow(on.app)).tokens;
+    const body = (await (await mcpCall(on.app, t1.access_token, "tools/list")).json()) as any;
+    expect(body.result.tools.length).toBeGreaterThan(0);
+    expect(JSON.stringify(body)).not.toContain("$schema");
+    expect(JSON.stringify(body)).not.toContain("execution");
+    expect(body.result.tools.find((t: any) => t.name === "notion_search").inputSchema.properties.query.type).toBe("string");
+
+    const off = await setup();
+    const t2 = (await fullFlow(off.app)).tokens;
+    const raw = JSON.stringify(await (await mcpCall(off.app, t2.access_token, "tools/list")).json());
+    expect(raw).toContain("$schema");
+  });
+});

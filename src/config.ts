@@ -31,6 +31,10 @@ const schema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  MCP_SANITIZE_SCHEMA: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   READ_ONLY: z
     .enum(["true", "false"])
     .default("true")
@@ -55,6 +59,8 @@ export interface Config {
   readOnly: boolean;
   /** true: /mcp の POST に application/json で応答 / false: text/event-stream (SSE) で応答 */
   mcpJsonResponse: boolean;
+  /** true: tools/list 応答から `$schema` / `execution` など Gemini が解釈できない可能性のある項目を除く (実験用) */
+  mcpSanitizeSchema: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -85,5 +91,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     notionApiVersion: e.NOTION_API_VERSION,
     readOnly: e.READ_ONLY,
     mcpJsonResponse: e.MCP_JSON_RESPONSE,
+    mcpSanitizeSchema: e.MCP_SANITIZE_SCHEMA,
   };
 }
