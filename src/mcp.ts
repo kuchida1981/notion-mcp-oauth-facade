@@ -154,6 +154,79 @@ export function buildMcpServer(
     },
   );
 
+  if (!config.readOnly) {
+    server.registerTool(
+      "notion_create_page",
+      {
+        description: "Notion のデータソース (DB) またはページ配下に新しい記憶ページを作成する",
+        inputSchema: {
+          parent_id: z.string().min(32).describe("親データソース (またはデータベース/親ページ) の UUID"),
+          parent_type: z
+            .enum(["data_source", "page"])
+            .optional()
+            .describe("親の種別 (既定: data_source)"),
+          title: z.string().min(1).describe("作成するページのタイトル"),
+          markdown: z.string().optional().describe("ページ本文の Markdown テキスト"),
+          properties_json: z
+            .string()
+            .optional()
+            .describe("追加プロパティの Notion API 形式 JSON 文字列"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false },
+      },
+      async ({ parent_id, parent_type, title, markdown, properties_json }) => {
+        try {
+          const properties = properties_json
+            ? (JSON.parse(properties_json) as Record<string, unknown>)
+            : undefined;
+          const created = await getNotion().createPage({
+            parentType: parent_type ?? "data_source",
+            parentId: parent_id,
+            title,
+            properties,
+            markdown,
+          });
+          return jsonText(created);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      "notion_update_page",
+      {
+        description: "Notion ページのプロパティ更新および本文末尾への Markdown 追記を行う",
+        inputSchema: {
+          page_id: z.string().min(32).describe("更新対象ページの UUID"),
+          title: z.string().min(1).optional().describe("変更後のページタイトル"),
+          properties_json: z
+            .string()
+            .optional()
+            .describe("更新するプロパティの Notion API 形式 JSON 文字列"),
+          append_markdown: z.string().optional().describe("本文末尾に追記する Markdown テキスト"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false },
+      },
+      async ({ page_id, title, properties_json, append_markdown }) => {
+        try {
+          const properties = properties_json
+            ? (JSON.parse(properties_json) as Record<string, unknown>)
+            : undefined;
+          const updated = await getNotion().updatePage({
+            pageId: page_id,
+            title,
+            properties,
+            appendMarkdown: append_markdown,
+          });
+          return jsonText(updated);
+        } catch (err) {
+          return toolError(err);
+        }
+      },
+    );
+  }
+
   return server;
 }
 
