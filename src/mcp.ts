@@ -321,15 +321,25 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
     const server = buildMcpServer(config, claims, notionOverride, evt);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
-      enableJsonResponse: true,
+      enableJsonResponse: config.mcpJsonResponse,
     });
     await server.connect(transport);
+    const closeServer = () => void server.close().catch(() => undefined);
+    let res: Response;
     try {
-      return await transport.handleRequest(c.req.raw);
-    } finally {
-      // レスポンス生成後に後始末 (ステートレス)
-      void server.close().catch(() => undefined);
+      res = await transport.handleRequest(c.req.raw);
+    } catch (err) {
+      closeServer();
+      throw err;
     }
+    if (config.mcpJsonResponse || !res.body) {
+      closeServer(); // JSON 応答は生成済みなので後始末してよい
+      return res;
+    }
+    // SSE 応答: ストリームが書き終わる (または中断される) まで transport を閉じない
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({ flush: closeServer });
+    res.body.pipeTo(writable).catch(closeServer);
+    return new Response(readable, { status: res.status, headers: res.headers });
   });
 
   // POST 以外 (GET/DELETE ほか) は 405
