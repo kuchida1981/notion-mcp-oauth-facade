@@ -43,6 +43,12 @@ export interface EventRecord {
   resource?: string;
   status_code: number;
   error?: string;
+  /** /mcp: JSON-RPC の method (バッチは "," 区切り)。引数や本文は記録しない */
+  rpc_method?: string;
+  /** /mcp: tools/call のツール名 */
+  tool_name?: string;
+  /** 処理時間 (ms) */
+  duration_ms?: number;
   /** Firestore TTL 用 (作成から30日後) */
   expire_at: Date;
 }
