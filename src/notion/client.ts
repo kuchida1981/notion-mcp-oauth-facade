@@ -20,6 +20,9 @@ export function normalizeNotionUuid(id: string): string {
   throw new Error("Invalid Notion ID: must be a UUID");
 }
 
+const BLOCK_FETCH_CONCURRENCY = 3;
+const BLOCK_FETCH_MAX_REQUESTS = 200;
+
 export class NotionApiError extends Error {
   constructor(
     public readonly status: number,
@@ -35,6 +38,22 @@ export interface NotionClientOptions {
   apiVersion?: string;
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  /** 1 回の HTTP 呼び出しのタイムアウト (ms)。既定 10000 */
+  timeoutMs?: number;
+  /** リトライ回数 (初回を除く)。既定 2 */
+  maxRetries?: number;
+  /** リトライ待機 (テスト用に差し替え可能) */
+  sleepFn?: (ms: number) => Promise<void>;
+}
+
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const MAX_RETRY_WAIT_MS = 5000;
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function retryWaitMs(res: Response | undefined, attempt: number): number {
+  const ra = Number(res?.headers.get("retry-after"));
+  const base = Number.isFinite(ra) && ra > 0 ? ra * 1000 : 500 * 2 ** attempt;
+  return Math.min(base, MAX_RETRY_WAIT_MS);
 }
 
 export interface NotionPage {
@@ -129,42 +148,83 @@ export class NotionClient {
   private readonly apiVersion: string;
   private readonly baseUrl: string;
   private readonly fetchFn: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly sleepFn: (ms: number) => Promise<void>;
 
   constructor(opts: NotionClientOptions) {
     this.token = opts.token;
     this.apiVersion = opts.apiVersion ?? "2025-09-03";
     this.baseUrl = (opts.baseUrl ?? "https://api.notion.com/v1").replace(/\/+$/, "");
     this.fetchFn = opts.fetchFn ?? fetch;
+    this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.maxRetries = opts.maxRetries ?? 2;
+    this.sleepFn = opts.sleepFn ?? defaultSleep;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Notion-Version": this.apiVersion,
-        "Content-Type": "application/json",
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-
-    const text = await res.text();
-    let parsed: Record<string, unknown> = {};
-    if (text) {
+  /**
+   * Notion API 呼び出し。タイムアウト付き。
+   * 429 は未処理なので常にリトライ可。502/503/504・タイムアウト・ネットワークエラーは
+   * 副作用のない呼び出し (idempotent) のみリトライする。
+   */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts: { idempotent?: boolean } = {},
+  ): Promise<T> {
+    const idempotent = opts.idempotent ?? method === "GET";
+    for (let attempt = 0; ; attempt++) {
+      const canRetry = attempt < this.maxRetries;
+      let res: Response;
+      let text: string;
       try {
-        parsed = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        parsed = {};
+        res = await this.fetchFn(`${this.baseUrl}${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Notion-Version": this.apiVersion,
+            "Content-Type": "application/json",
+          },
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+        text = await res.text();
+      } catch (err) {
+        const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+        if (idempotent && canRetry) {
+          await this.sleepFn(retryWaitMs(undefined, attempt));
+          continue;
+        }
+        throw new Error(
+          timedOut
+            ? `Notion API request timed out after ${this.timeoutMs}ms`
+            : "Notion API request failed (network error)",
+        );
       }
-    }
 
-    if (!res.ok) {
-      const code = typeof parsed.code === "string" ? parsed.code : "unknown_error";
-      const message = typeof parsed.message === "string" ? parsed.message : res.statusText || "request failed";
-      throw new NotionApiError(res.status, code, message);
-    }
+      if (!res.ok && canRetry && (res.status === 429 || (idempotent && RETRYABLE_STATUS.has(res.status)))) {
+        await this.sleepFn(retryWaitMs(res, attempt));
+        continue;
+      }
 
-    return parsed as T;
+      let parsed: Record<string, unknown> = {};
+      if (text) {
+        try {
+          parsed = JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          parsed = {};
+        }
+      }
+
+      if (!res.ok) {
+        const code = typeof parsed.code === "string" ? parsed.code : "unknown_error";
+        const message = typeof parsed.message === "string" ? parsed.message : res.statusText || "request failed";
+        throw new NotionApiError(res.status, code, message);
+      }
+
+      return parsed as T;
+    }
   }
 
   async search(params: {
@@ -180,7 +240,7 @@ export class NotionClient {
     }
     if (params.pageSize !== undefined) body.page_size = params.pageSize;
     if (params.startCursor) body.start_cursor = params.startCursor;
-    return this.request<NotionSearchResult>("POST", "/search", body);
+    return this.request<NotionSearchResult>("POST", "/search", body, { idempotent: true });
   }
 
   async getPage(pageId: string): Promise<NotionPage> {
@@ -188,26 +248,53 @@ export class NotionClient {
     return this.request<NotionPage>("GET", `/pages/${id}`);
   }
 
+  /**
+   * ブロック子要素を再帰取得する。同階層の子は並列に取得するが、HTTP の同時実行数は
+   * BLOCK_FETCH_CONCURRENCY に制限し (Notion は約 3 req/s)、1 回の取得あたりの
+   * 総 API 呼び出し数は BLOCK_FETCH_MAX_REQUESTS で打ち切る (超過分の子は展開しない)。
+   */
   async getAllBlockChildren(blockId: string, depth = 0, maxDepth = 3): Promise<NotionBlock[]> {
-    const id = normalizeNotionUuid(blockId);
+    const ctx = { active: 0, queue: [] as Array<() => void>, requests: 0 };
+    return this.fetchChildren(normalizeNotionUuid(blockId), depth, maxDepth, ctx);
+  }
+
+  private async fetchChildren(
+    id: string,
+    depth: number,
+    maxDepth: number,
+    ctx: { active: number; queue: Array<() => void>; requests: number },
+  ): Promise<NotionBlock[]> {
     const blocks: NotionBlock[] = [];
     let cursor: string | undefined;
 
     do {
+      if (ctx.requests >= BLOCK_FETCH_MAX_REQUESTS) break;
+      ctx.requests++;
       const qs = new URLSearchParams({ page_size: "100" });
       if (cursor) qs.set("start_cursor", cursor);
-      const res = await this.request<{
-        results: NotionBlock[];
-        next_cursor: string | null;
-        has_more: boolean;
-      }>("GET", `/blocks/${id}/children?${qs.toString()}`);
-
-      for (const b of res.results ?? []) {
-        if (b.has_children && depth < maxDepth) {
-          b.children = await this.getAllBlockChildren(b.id, depth + 1, maxDepth);
-        }
-        blocks.push(b);
+      if (ctx.active >= BLOCK_FETCH_CONCURRENCY) {
+        await new Promise<void>((resolve) => ctx.queue.push(resolve));
+      } else {
+        ctx.active++;
       }
+      let res: { results: NotionBlock[]; next_cursor: string | null; has_more: boolean };
+      try {
+        res = await this.request("GET", `/blocks/${id}/children?${qs.toString()}`);
+      } finally {
+        const next = ctx.queue.shift();
+        if (next) next(); // スロットを次の待機者へ引き継ぐ
+        else ctx.active--;
+      }
+
+      const page = res.results ?? [];
+      await Promise.all(
+        page
+          .filter((b) => b.has_children && depth < maxDepth)
+          .map(async (b) => {
+            b.children = await this.fetchChildren(b.id, depth + 1, maxDepth, ctx);
+          }),
+      );
+      blocks.push(...page);
       cursor = res.has_more && res.next_cursor ? res.next_cursor : undefined;
     } while (cursor);
 
@@ -249,14 +336,14 @@ export class NotionClient {
     if (params.startCursor) body.start_cursor = params.startCursor;
 
     try {
-      return await this.request<NotionSearchResult>("POST", `/data_sources/${id}/query`, body);
+      return await this.request<NotionSearchResult>("POST", `/data_sources/${id}/query`, body, { idempotent: true });
     } catch (err) {
       // database_id が渡された場合、GET /databases/{id} から data_sources[0].id を解決してフォールバック
       if (err instanceof NotionApiError && err.status === 404) {
         const db = await this.request<{ data_sources?: Array<{ id?: string }> }>("GET", `/databases/${id}`);
         const resolvedId = db.data_sources?.[0]?.id;
         if (resolvedId) {
-          return this.request<NotionSearchResult>("POST", `/data_sources/${resolvedId}/query`, body);
+          return this.request<NotionSearchResult>("POST", `/data_sources/${resolvedId}/query`, body, { idempotent: true });
         }
       }
       throw err;

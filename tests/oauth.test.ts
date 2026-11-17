@@ -16,6 +16,7 @@ import {
 } from "./helpers.js";
 
 const WWW_AUTH = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"`;
+const WWW_AUTH_INVALID = `Bearer error="invalid_token", resource_metadata="${BASE}/.well-known/oauth-protected-resource"`;
 
 describe("メタデータ / ヘルスチェック", () => {
   it("全て 200 で期待値を返す", async () => {
@@ -205,7 +206,7 @@ describe("/revoke", () => {
     expect((await app.request("/revoke", form({ token: tokens.access_token }))).status).toBe(200);
     const res = await mcpCall(app, tokens.access_token, "tools/list");
     expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH);
+    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH_INVALID);
   });
 
   it("未知のトークンでも 200", async () => {
@@ -310,11 +311,31 @@ describe("異常系", () => {
     expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH);
   });
 
+  it("無効トークンの 401 は error=invalid_token を含み、未提示では含まない", async () => {
+    const { app } = await setup();
+    const bad = await mcpCall(app, "garbage", "tools/list");
+    expect(bad.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    expect(bad.headers.get("www-authenticate")).toContain("resource_metadata=");
+    const none = await mcpCall(app, undefined, "tools/list");
+    expect(none.headers.get("www-authenticate")).not.toContain("invalid_token");
+  });
+
+  it("/mcp の内部エラーは JSON-RPC 形式の 500 になる", async () => {
+    const { app, store } = await setup();
+    const { tokens } = await fullFlow(app);
+    store.isJtiRevoked = async () => {
+      throw new Error("firestore down");
+    };
+    const res = await mcpCall(app, tokens.access_token, "tools/list");
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ jsonrpc: "2.0", error: { code: -32603 } });
+  });
+
   it("不正な署名のトークン -> 401", async () => {
     const { app } = await setup();
     const res = await mcpCall(app, "not.a.jwt", "tools/list");
     expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH);
+    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH_INVALID);
   });
 
   it("期限切れ JWT で /mcp -> 401 + WWW-Authenticate", async () => {
@@ -331,7 +352,7 @@ describe("異常系", () => {
       .sign(new TextEncoder().encode(config.jwtSigningKey));
     const res = await mcpCall(app, expired, "tools/list");
     expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH);
+    expect(res.headers.get("www-authenticate")).toBe(WWW_AUTH_INVALID);
   });
 
   it("aud 違いの JWT は 401", async () => {

@@ -47,6 +47,10 @@ export function createApp(config: Config, store: Store, notionOverride?: NotionC
     console.error("unhandled error:", err instanceof Error ? err.message : "unknown");
     const evt = c.get("evt");
     if (evt) evt.error = "server_error";
+    // MCP クライアントは JSON-RPC 形式のエラーを期待する
+    if (new URL(c.req.url).pathname === "/mcp") {
+      return c.json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }, 500);
+    }
     return c.json({ error: "server_error" }, 500);
   });
 
