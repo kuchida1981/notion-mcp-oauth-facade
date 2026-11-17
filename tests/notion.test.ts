@@ -192,7 +192,7 @@ describe("NotionClient & /mcp Notion ツール", () => {
     // database_id を渡しても data_source_id 解決フォールバックで取得できる
     const queryRes = await mcpCall(app, t.access_token, "tools/call", {
       name: "notion_query_data_source",
-      arguments: { data_source_id: DB_ID },
+      arguments: { data_source_id: DB_ID, filter_json: "{\"property\":\"Name\",\"title\":{\"is_not_empty\":true}}" },
     });
     const queryData = JSON.parse(((await queryRes.json()) as any).result.content[0].text);
     expect(queryData.results[0].title).toBe("Memory Entry");

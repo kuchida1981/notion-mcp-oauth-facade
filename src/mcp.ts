@@ -119,16 +119,18 @@ export function buildMcpServer(
       description: "Notion のデータソース (またはデータベース) をフィルター・ソート条件でクエリする",
       inputSchema: {
         data_source_id: z.string().min(32).describe("データソースまたはデータベースの UUID"),
-        filter: z.record(z.string(), z.unknown()).optional().describe("Notion API 形式の filter オブジェクト"),
-        sorts: z.array(z.record(z.string(), z.unknown())).optional().describe("Notion API 形式の sorts 配列"),
+        filter_json: z.string().optional().describe("Notion API 形式の filter JSON 文字列 (例: '{\"property\":\"Status\",\"select\":{\"equals\":\"Active\"}}')"),
+        sorts_json: z.string().optional().describe("Notion API 形式の sorts JSON 配列文字列"),
         page_size: z.number().int().min(1).max(50).optional().describe("取得件数 (既定 20, 最大 50)"),
         start_cursor: z.string().optional().describe("ページネーション用カーソル"),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ data_source_id, filter, sorts, page_size, start_cursor }) => {
+    async ({ data_source_id, filter_json, sorts_json, page_size, start_cursor }) => {
       try {
         const id = normalizeNotionUuid(data_source_id);
+        const filter = filter_json ? (JSON.parse(filter_json) as Record<string, unknown>) : undefined;
+        const sorts = sorts_json ? (JSON.parse(sorts_json) as Array<Record<string, unknown>>) : undefined;
         const res = await getNotion().queryDataSource({
           dataSourceId: id,
           filter,
