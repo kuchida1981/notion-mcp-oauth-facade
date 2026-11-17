@@ -241,6 +241,28 @@ export function buildMcpServer(
   return server;
 }
 
+/** 観察ログ用に JSON-RPC の method とツール名だけを取り出す (本文・引数は保持しない) */
+async function describeRpc(req: Request): Promise<{ rpc_method?: string; tool_name?: string }> {
+  try {
+    const body: unknown = await req.clone().json();
+    const msgs = Array.isArray(body) ? body : [body];
+    const methods: string[] = [];
+    const tools: string[] = [];
+    for (const m of msgs.slice(0, 10)) {
+      if (typeof m !== "object" || m === null) continue;
+      const rec = m as { method?: unknown; params?: { name?: unknown } };
+      if (typeof rec.method === "string") methods.push(rec.method.slice(0, 64));
+      if (rec.method === "tools/call" && typeof rec.params?.name === "string") tools.push(rec.params.name.slice(0, 64));
+    }
+    return {
+      rpc_method: methods.length ? methods.join(",") : undefined,
+      tool_name: tools.length ? tools.join(",") : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionClient): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const metadataUrl = `${config.publicBaseUrl}/.well-known/oauth-protected-resource`;
@@ -281,6 +303,8 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
       evt.error = "revoked_token";
       return unauthorized(true);
     }
+
+    Object.assign(evt, await describeRpc(c.req.raw));
 
     const server = buildMcpServer(config, claims, notionOverride);
     const transport = new WebStandardStreamableHTTPServerTransport({

@@ -378,3 +378,16 @@ describe("異常系", () => {
     }
   });
 });
+
+describe("events: /mcp の観察情報", () => {
+  it("rpc_method・tool_name・duration_ms を記録し、引数は記録しない", async () => {
+    const { app, store } = await setup();
+    const { tokens } = await fullFlow(app);
+    await mcpCall(app, tokens.access_token, "tools/call", { name: "whoami", arguments: { secret: "x" } });
+    const events = (store as unknown as { events: Array<Record<string, unknown>> }).events;
+    const evt = events.filter((e) => e.endpoint === "/mcp").at(-1)!;
+    expect(evt).toMatchObject({ rpc_method: "tools/call", tool_name: "whoami", status_code: 200 });
+    expect(typeof evt.duration_ms).toBe("number");
+    expect(JSON.stringify(evt)).not.toContain("secret");
+  });
+});

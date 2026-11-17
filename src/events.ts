@@ -5,7 +5,7 @@ import type { EventRecord, Store } from "./store/types.js";
 export type EventFields = Partial<
   Pick<
     EventRecord,
-    "grant_type" | "client_id" | "token_hash_prefix" | "redirect_uri" | "resource" | "error"
+    "grant_type" | "client_id" | "token_hash_prefix" | "redirect_uri" | "resource" | "error" | "rpc_method" | "tool_name"
   >
 >;
 
@@ -20,6 +20,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
 export function observe(store: Store): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("evt", {});
+    const startedAt = Date.now();
     await next();
     const path = new URL(c.req.url).pathname;
     if (path === "/healthz") return;
@@ -30,6 +31,7 @@ export function observe(store: Store): MiddlewareHandler<AppEnv> {
       endpoint: path,
       method: c.req.method,
       status_code: c.res.status,
+      duration_ms: now - startedAt,
       expire_at: new Date(now + THIRTY_DAYS_MS),
     };
     for (const [k, v] of Object.entries(fields)) {
