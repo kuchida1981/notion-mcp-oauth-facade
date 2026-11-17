@@ -24,3 +24,13 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+
+# Terraform (.terraform.lock.hcl はコミットする)
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+*.tfvars
+.envrc
+tfplan
+tfplan.json
