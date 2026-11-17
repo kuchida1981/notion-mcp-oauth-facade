@@ -2,16 +2,18 @@ import { Hono } from "hono";
 import type { Config } from "./config.js";
 import { observe, type AppEnv } from "./events.js";
 import { mcpRoutes } from "./mcp.js";
+import type { NotionClient } from "./notion/client.js";
 import { oauthRoutes } from "./oauth.js";
 import type { Store } from "./store/types.js";
 
-export function createApp(config: Config, store: Store): Hono<AppEnv> {
+export function createApp(config: Config, store: Store, notionOverride?: NotionClient): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const base = config.publicBaseUrl;
 
   app.use("*", observe(store));
 
   app.get("/healthz", (c) => c.json({ status: "ok" }));
+  app.get("/health", (c) => c.json({ status: "ok" }));
 
   const protectedResource = (c: { json: (o: unknown) => Response }) =>
     c.json({
@@ -39,7 +41,7 @@ export function createApp(config: Config, store: Store): Hono<AppEnv> {
   );
 
   app.route("/", oauthRoutes(config, store));
-  app.route("/", mcpRoutes(config, store));
+  app.route("/", mcpRoutes(config, store, notionOverride));
 
   app.onError((err, c) => {
     console.error("unhandled error:", err instanceof Error ? err.message : "unknown");

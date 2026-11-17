@@ -113,16 +113,13 @@ describe("正常系 E2E", () => {
 
     const list = await mcpCall(app, t.access_token, "tools/list");
     const names = ((await list.json()) as any).result.tools.map((x: any) => x.name).sort();
-    expect(names).toEqual(["echo", "whoami"]);
+    expect(names).toEqual(["notion_fetch", "notion_query_data_source", "notion_search", "whoami"]);
 
     const who = await mcpCall(app, t.access_token, "tools/call", { name: "whoami", arguments: {} });
     const claims = JSON.parse(((await who.json()) as any).result.content[0].text);
-    expect(claims).toMatchObject({ sub: "owner", client_id: clientId, iss: BASE, aud: `${BASE}/mcp`, rotated_refresh_mode: false });
+    expect(claims).toMatchObject({ sub: "owner", client_id: clientId, iss: BASE, aud: `${BASE}/mcp`, rotated_refresh_mode: false, read_only: true });
     expect(claims.jti).toBeTruthy();
     expect(claims.exp).toBeGreaterThan(Date.now() / 1000);
-
-    const echo = await mcpCall(app, t.access_token, "tools/call", { name: "echo", arguments: { message: "こんにちは" } });
-    expect(((await echo.json()) as any).result.content[0].text).toBe("こんにちは");
 
     // events: トークン生値は記録されない
     const dump = JSON.stringify(store.events);

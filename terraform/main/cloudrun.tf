@@ -48,6 +48,10 @@ resource "google_cloud_run_v2_service" "facade" {
         value = tostring(var.rotate_refresh)
       }
       env {
+        name  = "READ_ONLY"
+        value = tostring(var.read_only)
+      }
+      env {
         name = "JWT_SIGNING_KEY"
         value_source {
           secret_key_ref {
@@ -61,6 +65,15 @@ resource "google_cloud_run_v2_service" "facade" {
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.this["owner_password_hash"].secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "NOTION_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.this["notion_token"].secret_id
             version = "latest"
           }
         }

@@ -30,11 +30,17 @@ variable "public_base_url" {
 variable "access_ttl" {
   description = "アクセストークン寿命 (秒)"
   type        = number
-  default     = 300
+  default     = 3600
 }
 
 variable "rotate_refresh" {
   description = "リフレッシュトークンをローテーションするか"
   type        = bool
   default     = false
+}
+
+variable "read_only" {
+  description = "Phase 1 読み取り専用モード"
+  type        = bool
+  default     = true
 }
