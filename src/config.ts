@@ -27,6 +27,10 @@ const schema = z.object({
   ALLOW_LOCALHOST_REDIRECT: bool,
   NOTION_TOKEN: z.string().min(1).optional(),
   NOTION_API_VERSION: z.string().min(1).default("2025-09-03"),
+  MCP_JSON_RESPONSE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   READ_ONLY: z
     .enum(["true", "false"])
     .default("true")
@@ -49,6 +53,8 @@ export interface Config {
   notionToken?: string;
   notionApiVersion: string;
   readOnly: boolean;
+  /** true: /mcp の POST に application/json で応答 / false: text/event-stream (SSE) で応答 */
+  mcpJsonResponse: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -78,5 +84,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     notionToken: e.NOTION_TOKEN,
     notionApiVersion: e.NOTION_API_VERSION,
     readOnly: e.READ_ONLY,
+    mcpJsonResponse: e.MCP_JSON_RESPONSE,
   };
 }

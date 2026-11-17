@@ -48,6 +48,10 @@ resource "google_cloud_run_v2_service" "facade" {
         value = tostring(var.rotate_refresh)
       }
       env {
+        name  = "MCP_JSON_RESPONSE"
+        value = tostring(var.mcp_json_response)
+      }
+      env {
         name  = "READ_ONLY"
         value = tostring(var.read_only)
       }

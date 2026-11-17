@@ -44,3 +44,9 @@ variable "read_only" {
   type        = bool
   default     = false
 }
+
+variable "mcp_json_response" {
+  description = "/mcp の POST 応答形式。true: application/json (既定) / false: text/event-stream (Gemini 互換性の実験用)"
+  type        = bool
+  default     = true
+}

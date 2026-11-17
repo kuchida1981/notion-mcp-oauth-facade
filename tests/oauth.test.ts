@@ -391,3 +391,23 @@ describe("events: /mcp の観察情報", () => {
     expect(JSON.stringify(evt)).not.toContain("secret");
   });
 });
+
+describe("MCP_JSON_RESPONSE=false (SSE 応答)", () => {
+  it("text/event-stream で JSON-RPC 応答を返す", async () => {
+    const { app } = await setup({ MCP_JSON_RESPONSE: "false" });
+    const { tokens } = await fullFlow(app);
+    const res = await mcpCall(app, tokens.access_token, "tools/list");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const text = await res.text();
+    const data = text.split("\n").find((l) => l.startsWith("data:"))!;
+    expect(JSON.parse(data.slice(5)).result.tools.length).toBeGreaterThan(0);
+  });
+
+  it("既定 (true) は application/json", async () => {
+    const { app } = await setup();
+    const { tokens } = await fullFlow(app);
+    const res = await mcpCall(app, tokens.access_token, "tools/list");
+    expect(res.headers.get("content-type")).toContain("application/json");
+  });
+});
