@@ -25,7 +25,9 @@ const htmlHeaders = {
 
 function clientIpKey(c: Context<AppEnv>, prefix: string): string {
   const xff = c.req.header("x-forwarded-for");
-  const ip = xff ? xff.split(",")[0]!.trim() : "unknown";
+  // Cloud Run は実クライアント IP を X-Forwarded-For の末尾に追加する。先頭側はクライアントが
+  // 任意に指定できるため、末尾の要素を採用する (Cloud Run 直受けを前提。LB を前に置く場合は要見直し)
+  const ip = xff ? xff.split(",").at(-1)!.trim() || "unknown" : "unknown";
   return `${prefix}:${sha256Hex(ip)}`;
 }
 

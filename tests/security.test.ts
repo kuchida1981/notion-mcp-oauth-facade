@@ -95,6 +95,23 @@ describe("Phase 3 セキュリティ強化 (レート制限・ロックアウト
   });
 });
 
+describe("クライアント IP の判定", () => {
+  it("X-Forwarded-For の先頭を書き換えてもレート制限を回避できない", async () => {
+    const { app } = await setup();
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await app.request("/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Forwarded-For": `198.51.100.${i}, 203.0.113.99` },
+        body: JSON.stringify({ redirect_uris: ["https://gemini.google.com/oauth/callback"] }),
+      });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 10).every((s) => s === 201)).toBe(true);
+    expect(statuses[10]).toBe(429);
+  });
+});
+
 describe("events 書き込みの遅延", () => {
   it("addEvent が応答しなくてもレスポンスは返る", async () => {
     const { app, store } = await setup();
