@@ -109,7 +109,7 @@ describe("正常系 E2E", () => {
       clientInfo: { name: "test", version: "1" },
     });
     expect(init.status).toBe(200);
-    expect(((await init.json()) as any).result.serverInfo.name).toBe("notion-mcp-oauth-facade");
+    expect(((await init.json()) as any).result.serverInfo.name).toBe("notion");
 
     const list = await mcpCall(app, t.access_token, "tools/list");
     const names = ((await list.json()) as any).result.tools.map((x: any) => x.name).sort();

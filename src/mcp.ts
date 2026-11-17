@@ -30,7 +30,7 @@ export function buildMcpServer(
   notionOverride?: NotionClient,
 ): McpServer {
   const server = new McpServer(
-    { name: "notion-mcp-oauth-facade", version: "0.1.0" },
+    { name: "notion", version: "0.1.0" },
     {
       instructions:
         "ユーザーの長期記憶 (Operating Guide, Core Memory, Memory DB) を参照・保存・更新するための Notion 連携サーバー。会話開始時のルール確認やユーザー固有情報の検索・記録時に各ツールを使用する。",
