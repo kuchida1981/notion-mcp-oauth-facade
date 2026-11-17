@@ -11,6 +11,9 @@ export type EventFields = Partial<
 
 export type AppEnv = { Variables: { evt: EventFields } };
 
+/** 観察ログの書き込みでレスポンスを待たせる上限 (ms) */
+const EVENT_WRITE_TIMEOUT_MS = 1500;
+
 const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
 
 /** 全リクエストを events に記録するミドルウェア (/healthz を除く) */
@@ -33,7 +36,17 @@ export function observe(store: Store): MiddlewareHandler<AppEnv> {
       if (v !== undefined) (rec as unknown as Record<string, unknown>)[k] = v;
     }
     try {
-      await store.addEvent(rec);
+      // Cloud Run はレスポンス後に CPU が絞られ書き込みが落ちうるため fire-and-forget にはせず、
+      // 待ち時間だけ上限を設けて Firestore の遅延がレスポンスを止めないようにする
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout")), EVENT_WRITE_TIMEOUT_MS);
+      });
+      try {
+        await Promise.race([store.addEvent(rec), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (err) {
       // 観察ログの失敗でリクエストを落とさない
       console.error("event log failed:", err instanceof Error ? err.message : "unknown");

@@ -94,3 +94,12 @@ describe("Phase 3 セキュリティ強化 (レート制限・ロックアウト
     expect(okRes.status).toBe(302);
   });
 });
+
+describe("events 書き込みの遅延", () => {
+  it("addEvent が応答しなくてもレスポンスは返る", async () => {
+    const { app, store } = await setup();
+    store.addEvent = () => new Promise(() => undefined);
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    expect(res.status).toBe(200);
+  }, 5000);
+});
