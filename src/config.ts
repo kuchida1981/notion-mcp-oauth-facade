@@ -25,6 +25,12 @@ const schema = z.object({
   STORE_BACKEND: z.enum(["firestore", "memory"]).default("firestore"),
   FIRESTORE_DATABASE_ID: z.string().min(1).default("(default)"),
   ALLOW_LOCALHOST_REDIRECT: bool,
+  NOTION_TOKEN: z.string().min(1).optional(),
+  NOTION_API_VERSION: z.string().min(1).default("2025-09-03"),
+  READ_ONLY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 export interface Config {
@@ -40,6 +46,9 @@ export interface Config {
   storeBackend: "firestore" | "memory";
   firestoreDatabaseId: string;
   allowLocalhostRedirect: boolean;
+  notionToken?: string;
+  notionApiVersion: string;
+  readOnly: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -66,5 +75,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     storeBackend: e.STORE_BACKEND,
     firestoreDatabaseId: e.FIRESTORE_DATABASE_ID,
     allowLocalhostRedirect: e.ALLOW_LOCALHOST_REDIRECT,
+    notionToken: e.NOTION_TOKEN,
+    notionApiVersion: e.NOTION_API_VERSION,
+    readOnly: e.READ_ONLY,
   };
 }

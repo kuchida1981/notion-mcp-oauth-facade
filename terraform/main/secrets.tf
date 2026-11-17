@@ -4,6 +4,7 @@ locals {
   secret_ids = {
     jwt_signing_key     = "notion-mcp-jwt-signing-key"
     owner_password_hash = "notion-mcp-owner-password-hash"
+    notion_token        = "notion-mcp-notion-token"
   }
 }
 
