@@ -29,7 +29,13 @@ export function buildMcpServer(
   claims: AccessClaims,
   notionOverride?: NotionClient,
 ): McpServer {
-  const server = new McpServer({ name: "notion-mcp-oauth-facade", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "notion-mcp-oauth-facade", version: "0.1.0" },
+    {
+      instructions:
+        "ユーザーの長期記憶 (Operating Guide, Core Memory, Memory DB) を参照・保存・更新するための Notion 連携サーバー。会話開始時のルール確認やユーザー固有情報の検索・記録時に各ツールを使用する。",
+    },
+  );
 
   const getNotion = (): NotionClient => {
     if (notionOverride) return notionOverride;
@@ -62,7 +68,8 @@ export function buildMcpServer(
   server.registerTool(
     "notion_search",
     {
-      description: "Notion のページやデータソース (DB) をタイトル・本文で検索する",
+      description:
+        "Notion のページやデータソース (DB) をタイトル・本文で検索する。Operating Guide・Core Memory・Memory DB の確認や、ユーザー固有情報の検索時に使用する",
       inputSchema: {
         query: z.string().optional().describe("検索キーワード"),
         object_type: z.enum(["page", "data_source"]).optional().describe("対象種別で絞り込み"),
@@ -96,7 +103,8 @@ export function buildMcpServer(
   server.registerTool(
     "notion_fetch",
     {
-      description: "Notion ページのプロパティと本文を Markdown 形式で取得する",
+      description:
+        "Notion ページのプロパティと本文を Markdown 形式で取得する。Operating Guide や Core Memory の全文・ルールを読むときに使用する",
       inputSchema: {
         page_id: z.string().min(32).describe("Notion ページの UUID"),
       },
@@ -116,7 +124,8 @@ export function buildMcpServer(
   server.registerTool(
     "notion_query_data_source",
     {
-      description: "Notion のデータソース (またはデータベース) をフィルター・ソート条件でクエリする",
+      description:
+        "Notion のデータソース (Memory DB 等) をフィルター・ソート条件でクエリする。ユーザー固有の記憶・記録を一覧・絞り込み取得するときに使用する",
       inputSchema: {
         data_source_id: z.string().min(32).describe("データソースまたはデータベースの UUID"),
         filter_json: z.string().optional().describe("Notion API 形式の filter JSON 文字列 (例: '{\"property\":\"Status\",\"select\":{\"equals\":\"Active\"}}')"),
@@ -158,7 +167,8 @@ export function buildMcpServer(
     server.registerTool(
       "notion_create_page",
       {
-        description: "Notion のデータソース (DB) またはページ配下に新しい記憶ページを作成する",
+        description:
+          "Notion のデータソース (Memory DB 等) またはページ配下に新しい記憶ページを作成する。ユーザーが長期的に有用な情報を伝えたとき、重複確認のうえ新規保存するために使用する",
         inputSchema: {
           parent_id: z.string().min(32).describe("親データソース (またはデータベース/親ページ) の UUID"),
           parent_type: z
@@ -196,7 +206,8 @@ export function buildMcpServer(
     server.registerTool(
       "notion_update_page",
       {
-        description: "Notion ページのプロパティ更新および本文末尾への Markdown 追記を行う",
+        description:
+          "Notion ページのプロパティ更新および本文末尾への Markdown 追記を行う。既存の記憶ページを最新情報で更新するときに使用する",
         inputSchema: {
           page_id: z.string().min(32).describe("更新対象ページの UUID"),
           title: z.string().min(1).optional().describe("変更後のページタイトル"),
