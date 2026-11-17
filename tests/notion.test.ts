@@ -371,3 +371,63 @@ describe("getAllBlockChildren の並列取得", () => {
     expect(calls).toBe(200);
   });
 });
+
+describe("NotionClient のタイムアウトとリトライ", () => {
+  const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), { status, headers });
+  const noSleep = async () => undefined;
+
+  it("429 を Retry-After に従ってリトライし成功する (書き込みでも)", async () => {
+    const waits: number[] = [];
+    let n = 0;
+    const client = new NotionClient({
+      token: "t",
+      sleepFn: async (ms) => void waits.push(ms),
+      fetchFn: async () => (++n === 1 ? json(429, { code: "rate_limited", message: "slow" }, { "retry-after": "2" }) : json(200, { id: "x" })),
+    });
+    await expect(client.appendBlockChildren("11111111-1111-1111-1111-111111111111", [{}])).resolves.toBeUndefined();
+    expect(n).toBe(2);
+    expect(waits).toEqual([2000]);
+  });
+
+  it("503 は GET ならリトライ、書き込み (PATCH) ではリトライしない", async () => {
+    let n = 0;
+    const get = new NotionClient({
+      token: "t",
+      sleepFn: noSleep,
+      fetchFn: async () => (++n < 3 ? json(503, { message: "down" }) : json(200, { object: "page", id: "p" })),
+    });
+    await expect(get.getPage("11111111-1111-1111-1111-111111111111")).resolves.toMatchObject({ id: "p" });
+    expect(n).toBe(3);
+
+    let m = 0;
+    const patch = new NotionClient({
+      token: "t",
+      sleepFn: noSleep,
+      fetchFn: async () => (++m, json(503, { message: "down" })),
+    });
+    await expect(patch.appendBlockChildren("11111111-1111-1111-1111-111111111111", [{}])).rejects.toThrow("503");
+    expect(m).toBe(1);
+  });
+
+  it("応答しない Notion はタイムアウトで分かりやすいエラーになる", async () => {
+    const hang: typeof fetch = (_i, init) =>
+      new Promise((_res, rej) => {
+        init?.signal?.addEventListener("abort", () => rej(init.signal!.reason));
+      });
+    const client = new NotionClient({ token: "t", fetchFn: hang, timeoutMs: 20, maxRetries: 1, sleepFn: noSleep });
+    await expect(client.getPage("11111111-1111-1111-1111-111111111111")).rejects.toThrow("timed out after 20ms");
+  });
+
+  it("書き込みはタイムアウトしてもリトライしない", async () => {
+    let n = 0;
+    const hang: typeof fetch = (_i, init) =>
+      new Promise((_res, rej) => {
+        n++;
+        init?.signal?.addEventListener("abort", () => rej(init.signal!.reason));
+      });
+    const client = new NotionClient({ token: "t", fetchFn: hang, timeoutMs: 20, sleepFn: noSleep });
+    await expect(client.appendBlockChildren("11111111-1111-1111-1111-111111111111", [{}])).rejects.toThrow("timed out");
+    expect(n).toBe(1);
+  });
+});
