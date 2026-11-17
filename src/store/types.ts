@@ -47,6 +47,10 @@ export interface EventRecord {
   rpc_method?: string;
   /** /mcp: tools/call のツール名 */
   tool_name?: string;
+  /** /mcp: ツールが isError を返したときのエラーメッセージ (先頭 200 文字) */
+  tool_error?: string;
+  /** /mcp: ツール結果テキストのバイト数 */
+  result_bytes?: number;
   /** 処理時間 (ms) */
   duration_ms?: number;
   /** Firestore TTL 用 (作成から30日後) */
