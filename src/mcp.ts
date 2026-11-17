@@ -12,7 +12,7 @@ import {
   summarizePageProperties,
 } from "./notion/client.js";
 import type { Store } from "./store/types.js";
-import { verifyAccessToken, type AccessClaims } from "./tokens.js";
+import { signSessionId, verifyAccessToken, verifySessionId, type AccessClaims } from "./tokens.js";
 
 function baseJsonText(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -317,6 +317,12 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
     });
   };
 
+  const rpcError = (status: 400 | 404, code: number, message: string) =>
+    new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
+      status,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    });
+
   app.post("/mcp", async (c) => {
     const evt = c.get("evt");
     const header = c.req.header("authorization") ?? "";
@@ -350,6 +356,28 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
       ua: c.req.header("user-agent")?.slice(0, 80),
     };
 
+    // 実験: 署名付きセッション ID を要求する (MCP_REQUIRE_SESSION)
+    let sessionIdToIssue: string | undefined;
+    if (config.mcpRequireSession) {
+      const isInit = evt.rpc_method === "initialize";
+      const sid = c.req.header("mcp-session-id");
+      if (isInit) {
+        sessionIdToIssue = await signSessionId(config, claims.client_id);
+      } else if (!sid) {
+        evt.error = "missing_session";
+        return rpcError(400, -32600, "Bad Request: Mcp-Session-Id header is required");
+      } else if (!(await verifySessionId(config, sid, claims.client_id))) {
+        evt.error = "invalid_session";
+        return rpcError(404, -32001, "Session not found");
+      }
+    }
+    const withSession = (r: Response): Response => {
+      if (!sessionIdToIssue) return r;
+      const headers = new Headers(r.headers);
+      headers.set("Mcp-Session-Id", sessionIdToIssue);
+      return new Response(r.body, { status: r.status, headers });
+    };
+
     const server = buildMcpServer(config, claims, notionOverride, evt);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -368,14 +396,14 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
       closeServer(); // JSON 応答は生成済みなので後始末してよい
       if (config.mcpSanitizeSchema && config.mcpJsonResponse && evt.rpc_method === "tools/list" && res.ok) {
         const body = sanitizeToolsList(await res.json());
-        return new Response(JSON.stringify(body), { status: res.status, headers: res.headers });
+        return withSession(new Response(JSON.stringify(body), { status: res.status, headers: res.headers }));
       }
-      return res;
+      return withSession(res);
     }
     // SSE 応答: ストリームが書き終わる (または中断される) まで transport を閉じない
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({ flush: closeServer });
     res.body.pipeTo(writable).catch(closeServer);
-    return new Response(readable, { status: res.status, headers: res.headers });
+    return withSession(new Response(readable, { status: res.status, headers: res.headers }));
   });
 
   // POST 以外 (GET/DELETE ほか) は 405

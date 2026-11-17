@@ -58,3 +58,31 @@ export async function readVerifiedJti(
     return null;
   }
 }
+
+const SESSION_TTL = "24h";
+const SESSION_AUDIENCE = "mcp-session";
+
+/** ストア不要の署名付き MCP セッション ID (JWT)。アクセストークンとは aud で区別する */
+export async function signSessionId(config: Config, clientId: string): Promise<string> {
+  return new SignJWT({ client_id: clientId })
+    .setProtectedHeader({ alg: "HS256", kid: config.jwtKeyId, typ: "mcp-session+jwt" })
+    .setIssuer(config.publicBaseUrl)
+    .setAudience(SESSION_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime(SESSION_TTL)
+    .sign(keyOf(config));
+}
+
+/** 署名・期限・aud・client_id 一致を検証する。有効なら true */
+export async function verifySessionId(config: Config, sessionId: string, clientId: string): Promise<boolean> {
+  try {
+    const { payload, protectedHeader } = await jwtVerify(sessionId, keyOf(config), {
+      algorithms: ["HS256"],
+      issuer: config.publicBaseUrl,
+      audience: SESSION_AUDIENCE,
+    });
+    return protectedHeader.kid === config.jwtKeyId && payload.client_id === clientId;
+  } catch {
+    return false;
+  }
+}
