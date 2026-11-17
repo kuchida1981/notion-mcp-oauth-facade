@@ -3,7 +3,7 @@ import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { hashPassword } from "../src/crypto.js";
 import { normalizeNotionUuid, NotionClient } from "../src/notion/client.js";
-import { blocksToMarkdown } from "../src/notion/markdown.js";
+import { blocksToMarkdown, markdownToBlocks } from "../src/notion/markdown.js";
 import { InMemoryStore } from "../src/store/memory.js";
 import { BASE, fullFlow, mcpCall, PASSWORD, setup } from "./helpers.js";
 
@@ -218,5 +218,116 @@ describe("NotionClient & /mcp Notion ツール", () => {
     const body = (await res.json()) as any;
     expect(body.result.isError).toBe(true);
     expect(body.result.content[0].text).toContain("NOTION_TOKEN");
+  });
+
+  it("markdownToBlocks が各種 Markdown 構文を Notion ブロックに変換する", () => {
+    const blocks = markdownToBlocks("# タイトル\n\n- 箇条書き\n- [x] 完了\n1. 番号\n> 引用\n---\n```ts\nconst a = 1;\n```\n本文");
+    expect(blocks.map((b) => b.type)).toEqual([
+      "heading_1",
+      "bulleted_list_item",
+      "to_do",
+      "numbered_list_item",
+      "quote",
+      "divider",
+      "code",
+      "paragraph",
+    ]);
+  });
+
+  it("READ_ONLY=false で notion_create_page / notion_update_page が有効化され動作する", async () => {
+    const posted: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      const parsedBody = init?.body ? JSON.parse(init.body as string) : undefined;
+      posted.push({ url, method, body: parsedBody });
+
+      if (url.endsWith(`/data_sources/${DS_ID}`)) {
+        return new Response(
+          JSON.stringify({ id: DS_ID, properties: { 名前: { type: "title" } } }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/pages") && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            object: "page",
+            id: PAGE_ID,
+            url: `https://www.notion.so/${PAGE_ID}`,
+            properties: { 名前: { type: "title", title: [{ plain_text: "新しい記憶" }] } },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(`/pages/${PAGE_ID}`) && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            object: "page",
+            id: PAGE_ID,
+            properties: { 名前: { type: "title", title: [{ plain_text: "新しい記憶" }] } },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(`/pages/${PAGE_ID}`) && method === "PATCH") {
+        return new Response(
+          JSON.stringify({ object: "page", id: PAGE_ID, url: `https://www.notion.so/${PAGE_ID}` }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(`/blocks/${PAGE_ID}/children`) && method === "PATCH") {
+        return new Response(JSON.stringify({ results: [] }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const client = new NotionClient({ token: "ntn_test", fetchFn });
+    const config = loadConfig({
+      PUBLIC_BASE_URL: BASE,
+      JWT_SIGNING_KEY: "test-signing-key-test-signing-key-0123456789",
+      OWNER_PASSWORD_HASH: await hashPassword(PASSWORD),
+      STORE_BACKEND: "memory",
+      READ_ONLY: "false",
+    });
+    const app = createApp(config, new InMemoryStore(), client);
+    const { tokens: t } = await fullFlow(app);
+
+    const listRes = await mcpCall(app, t.access_token, "tools/list");
+    const toolNames = ((await listRes.json()) as any).result.tools.map((x: any) => x.name).sort();
+    expect(toolNames).toEqual([
+      "notion_create_page",
+      "notion_fetch",
+      "notion_query_data_source",
+      "notion_search",
+      "notion_update_page",
+      "whoami",
+    ]);
+
+    const createRes = await mcpCall(app, t.access_token, "tools/call", {
+      name: "notion_create_page",
+      arguments: {
+        parent_id: DS_ID,
+        title: "新しい記憶",
+        markdown: "## メモ\nテスト内容",
+      },
+    });
+    const created = JSON.parse(((await createRes.json()) as any).result.content[0].text);
+    expect(created).toMatchObject({ id: PAGE_ID, title: "新しい記憶" });
+
+    // タイトルプロパティ名 "名前" を自動検出してセットしていること
+    const createReq = posted.find((p) => p.url.endsWith("/pages") && p.method === "POST")?.body as any;
+    expect(createReq.properties["名前"].title[0].text.content).toBe("新しい記憶");
+    expect(createReq.children).toHaveLength(2);
+
+    const updateRes = await mcpCall(app, t.access_token, "tools/call", {
+      name: "notion_update_page",
+      arguments: {
+        page_id: PAGE_ID,
+        title: "更新後の記憶",
+        append_markdown: "- 追記項目",
+      },
+    });
+    const updated = JSON.parse(((await updateRes.json()) as any).result.content[0].text);
+    expect(updated).toMatchObject({ id: PAGE_ID, updated_properties: true, appended_blocks: 1 });
   });
 });

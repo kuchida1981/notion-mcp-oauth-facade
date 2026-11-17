@@ -1,4 +1,10 @@
-import { blocksToMarkdown, richTextToMarkdown, type NotionBlock, type NotionRichText } from "./markdown.js";
+import {
+  blocksToMarkdown,
+  markdownToBlocks,
+  richTextToMarkdown,
+  type NotionBlock,
+  type NotionRichText,
+} from "./markdown.js";
 
 const UUID_32_RE = /^[0-9a-f]{32}$/i;
 const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -255,5 +261,144 @@ export class NotionClient {
       }
       throw err;
     }
+  }
+
+  private async resolveDataSourceSchema(idOrDbId: string): Promise<{
+    dataSourceId: string;
+    titlePropertyKey: string;
+  }> {
+    const id = normalizeNotionUuid(idOrDbId);
+    let ds: { id: string; properties?: Record<string, { type?: string }> };
+    try {
+      ds = await this.request<{ id: string; properties?: Record<string, { type?: string }> }>(
+        "GET",
+        `/data_sources/${id}`,
+      );
+    } catch (err) {
+      if (err instanceof NotionApiError && err.status === 404) {
+        const db = await this.request<{ data_sources?: Array<{ id?: string }> }>("GET", `/databases/${id}`);
+        const resolvedId = db.data_sources?.[0]?.id;
+        if (!resolvedId) throw err;
+        ds = await this.request<{ id: string; properties?: Record<string, { type?: string }> }>(
+          "GET",
+          `/data_sources/${resolvedId}`,
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    let titleKey = "Name";
+    for (const [k, v] of Object.entries(ds.properties ?? {})) {
+      if (v?.type === "title") {
+        titleKey = k;
+        break;
+      }
+    }
+    return { dataSourceId: ds.id, titlePropertyKey: titleKey };
+  }
+
+  async appendBlockChildren(blockId: string, blocks: Array<Record<string, unknown>>): Promise<void> {
+    const id = normalizeNotionUuid(blockId);
+    for (let i = 0; i < blocks.length; i += 100) {
+      await this.request("PATCH", `/blocks/${id}/children`, {
+        children: blocks.slice(i, i + 100),
+      });
+    }
+  }
+
+  async createPage(params: {
+    parentType: "data_source" | "page";
+    parentId: string;
+    title: string;
+    properties?: Record<string, unknown>;
+    markdown?: string;
+  }): Promise<{ id: string; url?: string; title: string }> {
+    let parent: Record<string, unknown>;
+    const properties: Record<string, unknown> = { ...(params.properties ?? {}) };
+
+    if (params.parentType === "data_source") {
+      const { dataSourceId, titlePropertyKey } = await this.resolveDataSourceSchema(params.parentId);
+      parent = { type: "data_source_id", data_source_id: dataSourceId };
+      if (!(titlePropertyKey in properties)) {
+        properties[titlePropertyKey] = {
+          title: [{ type: "text", text: { content: params.title } }],
+        };
+      }
+    } else {
+      const pageId = normalizeNotionUuid(params.parentId);
+      parent = { type: "page_id", page_id: pageId };
+      if (!("title" in properties)) {
+        properties.title = {
+          title: [{ type: "text", text: { content: params.title } }],
+        };
+      }
+    }
+
+    const allBlocks = params.markdown ? markdownToBlocks(params.markdown) : [];
+    const body: Record<string, unknown> = { parent, properties };
+    if (allBlocks.length > 0) {
+      body.children = allBlocks.slice(0, 100);
+    }
+
+    const created = await this.request<NotionPage>("POST", "/pages", body);
+    if (allBlocks.length > 100) {
+      await this.appendBlockChildren(created.id, allBlocks.slice(100));
+    }
+    return {
+      id: created.id,
+      url: created.url,
+      title: extractObjectTitle(created as unknown as Record<string, unknown>),
+    };
+  }
+
+  async updatePage(params: {
+    pageId: string;
+    title?: string;
+    properties?: Record<string, unknown>;
+    appendMarkdown?: string;
+  }): Promise<{ id: string; url?: string; updated_properties: boolean; appended_blocks: number }> {
+    const id = normalizeNotionUuid(params.pageId);
+    const propsToUpdate: Record<string, unknown> = { ...(params.properties ?? {}) };
+
+    if (params.title !== undefined) {
+      const page = await this.getPage(id);
+      let titleKey = "title";
+      for (const [k, v] of Object.entries(page.properties ?? {})) {
+        if (v?.type === "title") {
+          titleKey = k;
+          break;
+        }
+      }
+      propsToUpdate[titleKey] = {
+        title: [{ type: "text", text: { content: params.title } }],
+      };
+    }
+
+    let url: string | undefined;
+    let updatedProperties = false;
+    if (Object.keys(propsToUpdate).length > 0) {
+      const updated = await this.request<NotionPage>("PATCH", `/pages/${id}`, {
+        properties: propsToUpdate,
+      });
+      url = updated.url;
+      updatedProperties = true;
+    }
+
+    let appendedBlocks = 0;
+    if (params.appendMarkdown) {
+      const blocks = markdownToBlocks(params.appendMarkdown);
+      if (blocks.length > 0) {
+        await this.appendBlockChildren(id, blocks);
+        appendedBlocks = blocks.length;
+      }
+    }
+
+    return {
+      id,
+      url,
+      updated_properties: updatedProperties,
+      appended_blocks: appendedBlocks,
+    };
   }
 }

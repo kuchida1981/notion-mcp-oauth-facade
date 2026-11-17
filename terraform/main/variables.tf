@@ -40,7 +40,7 @@ variable "rotate_refresh" {
 }
 
 variable "read_only" {
-  description = "Phase 1 読み取り専用モード"
+  description = "読み取り専用モード (Phase 2 以降は false)"
   type        = bool
-  default     = true
+  default     = false
 }
