@@ -245,12 +245,14 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
   const app = new Hono<AppEnv>();
   const metadataUrl = `${config.publicBaseUrl}/.well-known/oauth-protected-resource`;
 
-  const unauthorized = () => {
+  const unauthorized = (invalidToken = false) => {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401,
       headers: {
         "Content-Type": "application/json",
-        "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+        "WWW-Authenticate": invalidToken
+          ? `Bearer error="invalid_token", resource_metadata="${metadataUrl}"`
+          : `Bearer resource_metadata="${metadataUrl}"`,
         "Cache-Control": "no-store",
       },
     });
@@ -271,13 +273,13 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
       claims = await verifyAccessToken(config, token);
     } catch {
       evt.error = "invalid_token";
-      return unauthorized();
+      return unauthorized(true);
     }
     evt.client_id = claims.client_id;
     evt.resource = claims.aud;
     if (await store.isJtiRevoked(claims.jti)) {
       evt.error = "revoked_token";
-      return unauthorized();
+      return unauthorized(true);
     }
 
     const server = buildMcpServer(config, claims, notionOverride);
