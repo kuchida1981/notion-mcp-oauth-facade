@@ -449,3 +449,52 @@ describe("MCP_SANITIZE_SCHEMA", () => {
     expect(raw).toContain("$schema");
   });
 });
+
+describe("MCP_REQUIRE_SESSION", () => {
+  const rpc = (app: any, token: string, method: string, sid?: string, params: unknown = {}) =>
+    app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${token}`,
+        ...(sid ? { "Mcp-Session-Id": sid } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+  const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } };
+
+  it("initialize でセッション ID を発行し、それ以外はセッション ID を要求する", async () => {
+    const { app } = await setup({ MCP_REQUIRE_SESSION: "true" });
+    const { tokens } = await fullFlow(app);
+
+    const noSid = await rpc(app, tokens.access_token, "tools/list");
+    expect(noSid.status).toBe(400);
+    expect(await noSid.json()).toMatchObject({ jsonrpc: "2.0", error: { code: -32600 } });
+
+    const initRes = await rpc(app, tokens.access_token, "initialize", undefined, init);
+    expect(initRes.status).toBe(200);
+    const sid = initRes.headers.get("mcp-session-id")!;
+    expect(sid).toBeTruthy();
+
+    const ok = await rpc(app, tokens.access_token, "tools/list", sid);
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as any).result.tools.length).toBeGreaterThan(0);
+
+    const bad = await rpc(app, tokens.access_token, "tools/list", sid + "x");
+    expect(bad.status).toBe(404);
+  });
+
+  it("別クライアントのセッション ID は使えず、既定 (false) では要求されない", async () => {
+    const a = await setup({ MCP_REQUIRE_SESSION: "true" });
+    const t1 = (await fullFlow(a.app)).tokens;
+    const t2 = (await fullFlow(a.app)).tokens; // 別 client_id
+    const sid = (await rpc(a.app, t1.access_token, "initialize", undefined, init)).headers.get("mcp-session-id")!;
+    expect((await rpc(a.app, t2.access_token, "tools/list", sid)).status).toBe(404);
+
+    const off = await setup();
+    const t3 = (await fullFlow(off.app)).tokens;
+    expect((await rpc(off.app, t3.access_token, "tools/list")).status).toBe(200);
+    expect((await rpc(off.app, t3.access_token, "initialize", undefined, init)).headers.get("mcp-session-id")).toBeNull();
+  });
+});

@@ -78,6 +78,7 @@ openssl rand -base64 48   # JWT_SIGNING_KEY に設定
 | `FIRESTORE_DATABASE_ID` | No | `(default)` | 名前付き DB を使う場合に指定 |
 | `MCP_JSON_RESPONSE` | No | `true` | `/mcp` の応答形式。`false` で SSE (`text/event-stream`) |
 | `MCP_SANITIZE_SCHEMA` | No | `false` | `true` で `tools/list` から `$schema` / `execution` を除く (Gemini 互換性の実験用) |
+| `MCP_REQUIRE_SESSION` | No | `false` | `true` で署名付き `Mcp-Session-Id` を発行・要求 (Gemini 互換性の実験用) |
 | `ALLOW_LOCALHOST_REDIRECT` | No | `false` | `http://localhost` / `127.0.0.1` の redirect_uri を許可 |
 
 ## 開発・ビルド・テスト

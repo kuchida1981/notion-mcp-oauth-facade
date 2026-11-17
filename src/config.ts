@@ -35,6 +35,10 @@ const schema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  MCP_REQUIRE_SESSION: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   READ_ONLY: z
     .enum(["true", "false"])
     .default("true")
@@ -61,6 +65,11 @@ export interface Config {
   mcpJsonResponse: boolean;
   /** true: tools/list 応答から `$schema` / `execution` など Gemini が解釈できない可能性のある項目を除く (実験用) */
   mcpSanitizeSchema: boolean;
+  /**
+   * true: initialize 応答で署名付き Mcp-Session-Id を発行し、initialize 以外のリクエストにはそれを要求する
+   * (欠落は 400、不正・期限切れは 404)。ストアは使わない (実験用)
+   */
+  mcpRequireSession: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -92,5 +101,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     readOnly: e.READ_ONLY,
     mcpJsonResponse: e.MCP_JSON_RESPONSE,
     mcpSanitizeSchema: e.MCP_SANITIZE_SCHEMA,
+    mcpRequireSession: e.MCP_REQUIRE_SESSION,
   };
 }
