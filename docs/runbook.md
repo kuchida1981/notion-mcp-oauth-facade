@@ -61,7 +61,7 @@ import("@google-cloud/firestore").then(async ({ Firestore }) => {
   const snap = await db.collection("events").orderBy("timestamp", "desc").limit(20).get();
   snap.docs.reverse().forEach(d => {
     const x = d.data();
-    console.log(x.timestamp.toDate().toISOString(), x.method, x.endpoint, x.status_code, x.grant_type || "", x.error || "", x.token_hash_prefix || "", x.rpc_method || "", x.tool_name || "", (x.duration_ms ?? "") + "ms");
+    console.log(x.timestamp.toDate().toISOString(), x.method, x.endpoint, x.status_code, x.grant_type || "", x.error || "", x.token_hash_prefix || "", x.rpc_method || "", x.tool_name || "", (x.duration_ms ?? "") + "ms", x.result_bytes ?? "", x.tool_error || "");
   });
 });
 '

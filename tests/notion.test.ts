@@ -431,3 +431,33 @@ describe("NotionClient のタイムアウトとリトライ", () => {
     expect(n).toBe(1);
   });
 });
+
+describe("events: ツール結果の観察情報", () => {
+  const PAGE_ID = "11111111-1111-1111-1111-111111111111";
+
+  async function appWith(fetchFn: typeof fetch) {
+    const config = loadConfig({
+      PUBLIC_BASE_URL: BASE,
+      JWT_SIGNING_KEY: "test-signing-key-test-signing-key-0123456789",
+      OWNER_PASSWORD_HASH: await hashPassword(PASSWORD),
+      STORE_BACKEND: "memory",
+    });
+    const store = new InMemoryStore();
+    const app = createApp(config, store, new NotionClient({ token: "ntn_secret", fetchFn, sleepFn: async () => undefined }));
+    const { tokens } = await fullFlow(app);
+    const lastMcp = () => store.events.filter((e) => e.endpoint === "/mcp").at(-1)!;
+    return { app, tokens, lastMcp };
+  }
+
+  it("成功時は result_bytes、失敗時は tool_error を記録する (トークンは含まない)", async () => {
+    const ok = await appWith(async () => new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null })));
+    await mcpCall(ok.app, ok.tokens.access_token, "tools/call", { name: "notion_search", arguments: {} });
+    expect(ok.lastMcp().result_bytes).toBeGreaterThan(0);
+    expect(ok.lastMcp().tool_error).toBeUndefined();
+
+    const ng = await appWith(async () => new Response(JSON.stringify({ code: "unauthorized", message: "API token is invalid." }), { status: 401 }));
+    await mcpCall(ng.app, ng.tokens.access_token, "tools/call", { name: "notion_fetch", arguments: { page_id: PAGE_ID } });
+    expect(ng.lastMcp().tool_error).toContain("401 unauthorized");
+    expect(JSON.stringify(ng.lastMcp())).not.toContain("ntn_secret");
+  });
+});

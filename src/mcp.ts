@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import * as z from "zod/v4";
 import type { Config } from "./config.js";
 import { hashPrefix } from "./crypto.js";
-import type { AppEnv } from "./events.js";
+import type { AppEnv, EventFields } from "./events.js";
 import {
   extractObjectTitle,
   normalizeNotionUuid,
@@ -14,11 +14,11 @@ import {
 import type { Store } from "./store/types.js";
 import { verifyAccessToken, type AccessClaims } from "./tokens.js";
 
-function jsonText(obj: unknown) {
+function baseJsonText(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
 }
 
-function toolError(err: unknown) {
+function baseToolError(err: unknown) {
   const msg = err instanceof Error ? err.message : "Notion tool execution failed";
   return { isError: true, content: [{ type: "text" as const, text: msg }] };
 }
@@ -28,7 +28,19 @@ export function buildMcpServer(
   config: Config,
   claims: AccessClaims,
   notionOverride?: NotionClient,
+  evt: EventFields = {},
 ): McpServer {
+  // 観察ログ用: ツール結果のサイズとエラー内容 (Notion API のエラーコード等。トークンは含まない) を記録する
+  const jsonText = (obj: unknown) => {
+    const r = baseJsonText(obj);
+    evt.result_bytes = (evt.result_bytes ?? 0) + Buffer.byteLength(r.content[0]!.text);
+    return r;
+  };
+  const toolError = (err: unknown) => {
+    const r = baseToolError(err);
+    evt.tool_error = r.content[0]!.text.slice(0, 200);
+    return r;
+  };
   const server = new McpServer(
     { name: "notion", version: "0.1.0" },
     {
@@ -306,7 +318,7 @@ export function mcpRoutes(config: Config, store: Store, notionOverride?: NotionC
 
     Object.assign(evt, await describeRpc(c.req.raw));
 
-    const server = buildMcpServer(config, claims, notionOverride);
+    const server = buildMcpServer(config, claims, notionOverride, evt);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
